@@ -1,12 +1,14 @@
 import { FormEvent, useState } from "react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { useOpencode } from "@/state/opencode-store"
+import { useOpencodeStore } from "@/state/opencode-store"
 import { Loader2, Send } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export function ChatComposer() {
-  const { activeSessionID, prompt, busySessionIDs } = useOpencode()
+  const activeSessionID = useOpencodeStore((state) => state.activeSessionID)
+  const prompt = useOpencodeStore((state) => state.prompt)
+  const busySessionIDs = useOpencodeStore((state) => state.busySessionIDs)
   const [value, setValue] = useState("")
   const [sending, setSending] = useState(false)
 

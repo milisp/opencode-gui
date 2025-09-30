@@ -3,19 +3,22 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { useOpencode } from "@/state/opencode-store"
+import { useOpencodeStore } from "@/state/opencode-store"
 import { FilePlus2, Loader2, RefreshCw, Search, Trash2 } from "lucide-react"
+import { useShallow } from "zustand/react/shallow"
 
 export function SessionSidebar() {
-  const {
-    sessions,
-    selectSession,
-    activeSessionID,
-    isLoadingSessions,
-    refreshSessions,
-    createSession,
-    deleteSession,
-  } = useOpencode()
+  const { sessions, activeSessionID, isLoadingSessions } = useOpencodeStore(
+    useShallow((state) => ({
+      sessions: state.sessions,
+      activeSessionID: state.activeSessionID,
+      isLoadingSessions: state.isLoadingSessions,
+    })),
+  )
+  const selectSession = useOpencodeStore((state) => state.selectSession)
+  const refreshSessions = useOpencodeStore((state) => state.refreshSessions)
+  const createSession = useOpencodeStore((state) => state.createSession)
+  const deleteSession = useOpencodeStore((state) => state.deleteSession)
   const [query, setQuery] = useState("")
   const [deletingID, setDeletingID] = useState<string | null>(null)
 

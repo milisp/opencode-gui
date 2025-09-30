@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
-import { useOpencode } from "@/state/opencode-store"
+import { useOpencodeStore } from "@/state/opencode-store"
 import type {
   MessagePart,
   MessageWithParts,
@@ -18,7 +18,7 @@ import type {
 import { Bot, FileText, PenTool, Terminal, User } from "lucide-react"
 
 export function ChatTimeline() {
-  const { activeMessages } = useOpencode()
+  const activeMessages = useOpencodeStore((state) => state.activeMessages)
   const viewportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

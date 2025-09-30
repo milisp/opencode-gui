@@ -1,20 +1,12 @@
+import { useEffect, type ReactNode } from "react"
+import { create } from "zustand"
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react"
-import {
-  createSession,
-  deleteSession as deleteSessionRequest,
-  fetchMessages,
-  fetchSessions,
+  createSession as apiCreateSession,
+  deleteSession as apiDeleteSession,
+  fetchMessages as apiFetchMessages,
+  fetchSessions as apiFetchSessions,
   readConfig,
-  sendPrompt,
+  sendPrompt as apiSendPrompt,
   subscribeEvents,
   type OpencodeConfig,
   writeConfig,
@@ -27,26 +19,41 @@ import type {
   SessionInfo,
 } from "@/types/opencode"
 
-interface OpencodeStateValue {
+interface MessageMap {
+  [sessionID: string]: MessageWithParts[]
+}
+
+interface OpencodeStoreState {
   config: OpencodeConfig
-  updateConfig: (input: Partial<OpencodeConfig>) => void
   sessions: SessionInfo[]
-  isLoadingSessions: boolean
-  isLoadingMessages: boolean
+  messages: MessageMap
   activeSessionID?: string
   activeSession?: SessionInfo
   activeMessages: MessageWithParts[]
+  isLoadingSessions: boolean
+  isLoadingMessages: boolean
   busySessionIDs: Set<string>
+  lastError?: string
+  updateConfig: (input: Partial<OpencodeConfig>) => void
   selectSession: (sessionID: string) => void
   refreshSessions: () => Promise<void>
-  prompt: (sessionID: string, input: { text: string }) => Promise<void>
+  loadMessages: (sessionID: string) => Promise<void>
   createSession: (input?: { parentID?: string; title?: string }) => Promise<SessionInfo>
   deleteSession: (sessionID: string) => Promise<void>
+  prompt: (sessionID: string, input: { text: string }) => Promise<void>
+  mergeSession: (session: SessionInfo) => void
+  removeSessionState: (sessionID: string) => void
+  mergeMessage: (message: MessageWithParts) => void
+  updateMessageInfo: (info: MessageWithParts["info"]) => void
+  updateMessagePart: (part: MessagePart) => void
+  removeMessagePart: (sessionID: string, messageID: string, partID: string) => void
+  removeMessage: (sessionID: string, messageID: string) => void
+  setBusy: (sessionID: string, busy: boolean) => void
+  setLastError: (message?: string) => void
+  clearError: () => void
 }
 
-const OpencodeContext = createContext<OpencodeStateValue | null>(null)
-
-function mergeOrInsert(list: SessionInfo[], next: SessionInfo): SessionInfo[] {
+function mergeSessions(list: SessionInfo[], next: SessionInfo): SessionInfo[] {
   const index = list.findIndex((item) => item.id === next.id)
   if (index >= 0) {
     const copy = [...list]
@@ -63,14 +70,11 @@ function removeSession(list: SessionInfo[], id: string): SessionInfo[] {
   return list.filter((item) => item.id !== id)
 }
 
-function mergeMessage(list: MessageWithParts[], next: MessageWithParts): MessageWithParts[] {
+function mergeMessageList(list: MessageWithParts[], next: MessageWithParts): MessageWithParts[] {
   const index = list.findIndex((item) => item.info.id === next.info.id)
   if (index >= 0) {
     const copy = [...list]
-    copy[index] = {
-      info: next.info,
-      parts: next.parts,
-    }
+    copy[index] = next
     copy.sort((a, b) => (a.info.time.created ?? 0) - (b.info.time.created ?? 0))
     return copy
   }
@@ -79,7 +83,7 @@ function mergeMessage(list: MessageWithParts[], next: MessageWithParts): Message
   return copy
 }
 
-function mergeMessageInfo(list: MessageWithParts[], info: MessageWithParts["info"]): MessageWithParts[] {
+function mergeMessageInfoList(list: MessageWithParts[], info: MessageWithParts["info"]): MessageWithParts[] {
   const index = list.findIndex((item) => item.info.id === info.id)
   if (index >= 0) {
     const copy = [...list]
@@ -92,7 +96,7 @@ function mergeMessageInfo(list: MessageWithParts[], info: MessageWithParts["info
   return list
 }
 
-function mergeMessagePart(list: MessageWithParts[], part: MessagePart): MessageWithParts[] {
+function mergeMessagePartList(list: MessageWithParts[], part: MessagePart): MessageWithParts[] {
   const index = list.findIndex((item) => item.info.id === part.messageID)
   if (index < 0) return list
   const target = list[index]!
@@ -112,7 +116,7 @@ function mergeMessagePart(list: MessageWithParts[], part: MessagePart): MessageW
   return nextList
 }
 
-function removeMessagePart(list: MessageWithParts[], messageID: string, partID: string): MessageWithParts[] {
+function removeMessagePartFromList(list: MessageWithParts[], messageID: string, partID: string): MessageWithParts[] {
   const index = list.findIndex((item) => item.info.id === messageID)
   if (index < 0) return list
   const target = list[index]!
@@ -125,251 +129,386 @@ function removeMessagePart(list: MessageWithParts[], messageID: string, partID: 
   return nextList
 }
 
-function removeMessage(list: MessageWithParts[], messageID: string): MessageWithParts[] {
+function removeMessageFromList(list: MessageWithParts[], messageID: string): MessageWithParts[] {
   return list.filter((item) => item.info.id !== messageID)
 }
 
-export function OpencodeProvider({ children }: { children: ReactNode }) {
-  const [config, setConfig] = useState<OpencodeConfig>(() => readConfig())
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
-  const [activeSessionID, setActiveSessionID] = useState<string | undefined>(undefined)
-  const [messages, setMessages] = useState<Record<string, MessageWithParts[]>>({})
-  const [isLoadingSessions, setIsLoadingSessions] = useState(false)
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false)
-  const [busySessionIDs, setBusySessionIDs] = useState<Set<string>>(new Set())
-  const eventSubscription = useRef<ReturnType<typeof subscribeEvents> | null>(null)
+export const useOpencodeStore = create<OpencodeStoreState>((set, get) => ({
+  config: readConfig(),
+  sessions: [],
+  messages: {},
+  activeSessionID: undefined,
+  activeSession: undefined,
+  activeMessages: [],
+  isLoadingSessions: false,
+  isLoadingMessages: false,
+  busySessionIDs: new Set<string>(),
+  lastError: undefined,
 
-  const refreshSessions = useCallback(async () => {
-    setIsLoadingSessions(true)
-    try {
-      const result = await fetchSessions(config)
-      const sorted = [...result].sort((a, b) => b.time.updated - a.time.updated)
-      setSessions(sorted)
-      if (!activeSessionID && sorted.length > 0) {
-        setActiveSessionID(sorted[0]!.id)
+  updateConfig: (input) => {
+    set((state) => {
+      const nextConfig: OpencodeConfig = {
+        ...state.config,
+        ...input,
       }
+      writeConfig(nextConfig)
+      return {
+        config: nextConfig,
+      }
+    })
+  },
+
+  selectSession: (sessionID) => {
+    set((state) => {
+      const session = state.sessions.find((item) => item.id === sessionID)
+      const activeMessages = state.messages[sessionID] ?? []
+      return {
+        activeSessionID: sessionID,
+        activeSession: session,
+        activeMessages,
+      }
+    })
+  },
+
+  refreshSessions: async () => {
+    const { config } = get()
+    set({ isLoadingSessions: true })
+    try {
+      const result = await apiFetchSessions(config)
+      const sorted = [...result].sort((a, b) => b.time.updated - a.time.updated)
+      set((state) => {
+        const nextActiveID = state.activeSessionID && sorted.some((item) => item.id === state.activeSessionID)
+          ? state.activeSessionID
+          : sorted[0]?.id
+        return {
+          sessions: sorted,
+          activeSessionID: nextActiveID,
+          activeSession: nextActiveID ? sorted.find((item) => item.id === nextActiveID) : undefined,
+          activeMessages: nextActiveID ? state.messages[nextActiveID] ?? [] : [],
+          isLoadingSessions: false,
+        }
+      })
     } catch (error) {
-      console.error("Failed to load sessions", error)
-    } finally {
-      setIsLoadingSessions(false)
+      set({
+        isLoadingSessions: false,
+        lastError: error instanceof Error ? error.message : String(error),
+      })
     }
-  }, [config, activeSessionID])
+  },
+
+  loadMessages: async (sessionID) => {
+    const { config } = get()
+    set({ isLoadingMessages: true })
+    try {
+      const result = await apiFetchMessages(sessionID, config)
+      set((state) => {
+        const messages: MessageMap = {
+          ...state.messages,
+          [sessionID]: result,
+        }
+        const activeMessages = state.activeSessionID === sessionID ? result : state.activeMessages
+        return {
+          messages,
+          activeMessages,
+          isLoadingMessages: false,
+        }
+      })
+    } catch (error) {
+      set({
+        isLoadingMessages: false,
+        lastError: error instanceof Error ? error.message : String(error),
+      })
+    }
+  },
+
+  createSession: async (input) => {
+    const { config } = get()
+    const session = await apiCreateSession(input ?? {}, config)
+    set((state) => {
+      const sessions = mergeSessions(state.sessions, session)
+      return {
+        sessions,
+        activeSessionID: session.id,
+        activeSession: session,
+        activeMessages: state.messages[session.id] ?? [],
+      }
+    })
+    return session
+  },
+
+  deleteSession: async (sessionID) => {
+    const { config } = get()
+    await apiDeleteSession(sessionID, config)
+    set((state) => {
+      const sessions = removeSession(state.sessions, sessionID)
+      const messages = { ...state.messages }
+      delete messages[sessionID]
+      const nextActiveID = state.activeSessionID === sessionID ? sessions[0]?.id : state.activeSessionID
+      return {
+        sessions,
+        messages,
+        activeSessionID: nextActiveID,
+        activeSession: nextActiveID ? sessions.find((item) => item.id === nextActiveID) : undefined,
+        activeMessages: nextActiveID ? messages[nextActiveID] ?? [] : [],
+        busySessionIDs: (() => {
+          const next = new Set(state.busySessionIDs)
+          next.delete(sessionID)
+          return next
+        })(),
+      }
+    })
+  },
+
+  prompt: async (sessionID, input) => {
+    const text = input.text.trim()
+    if (!text) return
+    const payload: PromptInput = {
+      parts: [
+        {
+          type: "text",
+          text,
+        },
+      ],
+    }
+    get().setBusy(sessionID, true)
+    try {
+      const { config } = get()
+      const response = await apiSendPrompt(sessionID, payload, config)
+      set((state) => {
+        const messages = {
+          ...state.messages,
+          [sessionID]: mergeMessageList(state.messages[sessionID] ?? [], response),
+        }
+        const activeMessages = state.activeSessionID === sessionID ? messages[sessionID]! : state.activeMessages
+        return {
+          messages,
+          activeMessages,
+        }
+      })
+    } catch (error) {
+      set({
+        lastError:
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+            ? error
+            : "Failed to send prompt",
+      })
+    } finally {
+      get().setBusy(sessionID, false)
+    }
+  },
+
+  mergeSession: (session) => {
+    set((state) => {
+      const sessions = mergeSessions(state.sessions, session)
+      const isActive = state.activeSessionID === session.id
+      return {
+        sessions,
+        activeSession: isActive ? session : state.activeSession,
+      }
+    })
+  },
+
+  removeSessionState: (sessionID) => {
+    set((state) => {
+      const sessions = removeSession(state.sessions, sessionID)
+      const messages = { ...state.messages }
+      delete messages[sessionID]
+      const nextActiveID = state.activeSessionID === sessionID ? sessions[0]?.id : state.activeSessionID
+      return {
+        sessions,
+        messages,
+        activeSessionID: nextActiveID,
+        activeSession: nextActiveID ? sessions.find((item) => item.id === nextActiveID) : undefined,
+        activeMessages: nextActiveID ? messages[nextActiveID] ?? [] : [],
+        busySessionIDs: (() => {
+          const next = new Set(state.busySessionIDs)
+          next.delete(sessionID)
+          return next
+        })(),
+      }
+    })
+  },
+
+  mergeMessage: (message) => {
+    set((state) => {
+      const sessionID = message.info.sessionID
+      const messages = {
+        ...state.messages,
+        [sessionID]: mergeMessageList(state.messages[sessionID] ?? [], message),
+      }
+      const activeMessages = state.activeSessionID === sessionID ? messages[sessionID]! : state.activeMessages
+      return {
+        messages,
+        activeMessages,
+      }
+    })
+  },
+
+  updateMessageInfo: (info) => {
+    set((state) => {
+      const sessionID = info.sessionID
+      const existing = state.messages[sessionID]
+      if (!existing) return {}
+      const messages = {
+        ...state.messages,
+        [sessionID]: mergeMessageInfoList(existing, info),
+      }
+      const activeMessages = state.activeSessionID === sessionID ? messages[sessionID]! : state.activeMessages
+      return {
+        messages,
+        activeMessages,
+      }
+    })
+  },
+
+  updateMessagePart: (part) => {
+    set((state) => {
+      const sessionID = part.sessionID
+      const existing = state.messages[sessionID]
+      if (!existing) return {}
+      const messages = {
+        ...state.messages,
+        [sessionID]: mergeMessagePartList(existing, part),
+      }
+      const activeMessages = state.activeSessionID === sessionID ? messages[sessionID]! : state.activeMessages
+      return {
+        messages,
+        activeMessages,
+      }
+    })
+  },
+
+  removeMessagePart: (sessionID, messageID, partID) => {
+    set((state) => {
+      const existing = state.messages[sessionID]
+      if (!existing) return {}
+      const messages = {
+        ...state.messages,
+        [sessionID]: removeMessagePartFromList(existing, messageID, partID),
+      }
+      const activeMessages = state.activeSessionID === sessionID ? messages[sessionID]! : state.activeMessages
+      return {
+        messages,
+        activeMessages,
+      }
+    })
+  },
+
+  removeMessage: (sessionID, messageID) => {
+    set((state) => {
+      const existing = state.messages[sessionID]
+      if (!existing) return {}
+      const messages = {
+        ...state.messages,
+        [sessionID]: removeMessageFromList(existing, messageID),
+      }
+      const activeMessages = state.activeSessionID === sessionID ? messages[sessionID]! : state.activeMessages
+      return {
+        messages,
+        activeMessages,
+      }
+    })
+  },
+
+  setBusy: (sessionID, busy) => {
+    if (!sessionID) return
+    set((state) => {
+      const next = new Set(state.busySessionIDs)
+      if (busy) {
+        next.add(sessionID)
+      } else {
+        next.delete(sessionID)
+      }
+      return {
+        busySessionIDs: next,
+      }
+    })
+  },
+
+  setLastError: (message) => {
+    set({ lastError: message })
+  },
+
+  clearError: () => {
+    set({ lastError: undefined })
+  },
+}))
+
+export function OpencodeProvider({ children }: { children: ReactNode }) {
+  const config = useOpencodeStore((state) => state.config)
+  const refreshSessions = useOpencodeStore((state) => state.refreshSessions)
+  const loadMessages = useOpencodeStore((state) => state.loadMessages)
+  const activeSessionID = useOpencodeStore((state) => state.activeSessionID)
 
   useEffect(() => {
     refreshSessions()
-  }, [refreshSessions])
+  }, [refreshSessions, config.baseUrl, config.directory])
 
   useEffect(() => {
     if (!activeSessionID) return
-    setIsLoadingMessages(true)
-    fetchMessages(activeSessionID, config)
-      .then((result) => {
-        setMessages((prev) => ({
-          ...prev,
-          [activeSessionID]: result,
-        }))
-      })
-      .catch((error) => {
-        console.error("Failed to load messages", error)
-      })
-      .finally(() => {
-        setIsLoadingMessages(false)
-      })
-  }, [activeSessionID, config])
-
-  const handleEvent = useCallback(
-    (event: ServerEvent) => {
-      if (event.type === "server.connected") {
-        refreshSessions()
-        return
-      }
-      if (event.type === "session.updated") {
-        setSessions((prev) => mergeOrInsert(prev, event.properties.info))
-        return
-      }
-      if (event.type === "session.deleted") {
-        setSessions((prev) => removeSession(prev, event.properties.info.id))
-        setMessages((prev) => {
-          const next = { ...prev }
-          delete next[event.properties.info.id]
-          return next
-        })
-        if (activeSessionID === event.properties.info.id) {
-          setActiveSessionID((prev) => {
-            if (prev !== event.properties.info.id) return prev
-            const remaining = sessions.filter((session) => session.id !== event.properties.info.id)
-            return remaining.length ? remaining[0]!.id : undefined
-          })
-        }
-        return
-      }
-      if (event.type === "session.idle") {
-        setBusySessionIDs((prev) => {
-          const next = new Set(prev)
-          next.delete(event.properties.sessionID)
-          return next
-        })
-        return
-      }
-      if (event.type === "session.error") {
-        console.error("Session error", event.properties)
-        setBusySessionIDs((prev) => {
-          if (!event.properties.sessionID) return prev
-          const next = new Set(prev)
-          next.delete(event.properties.sessionID)
-          return next
-        })
-        return
-      }
-      if (event.type === "message.updated") {
-        setMessages((prev) => ({
-          ...prev,
-          [event.properties.info.sessionID]: mergeMessageInfo(prev[event.properties.info.sessionID] ?? [], event.properties.info),
-        }))
-        return
-      }
-      if (event.type === "message.removed") {
-        setMessages((prev) => ({
-          ...prev,
-          [event.properties.sessionID]: removeMessage(prev[event.properties.sessionID] ?? [], event.properties.messageID),
-        }))
-        return
-      }
-      if (event.type === "message.part.updated") {
-        setMessages((prev) => ({
-          ...prev,
-          [event.properties.part.sessionID]: mergeMessagePart(prev[event.properties.part.sessionID] ?? [], event.properties.part),
-        }))
-        return
-      }
-      if (event.type === "message.part.removed") {
-        setMessages((prev) => ({
-          ...prev,
-          [event.properties.sessionID]: removeMessagePart(
-            prev[event.properties.sessionID] ?? [],
-            event.properties.messageID,
-            event.properties.partID,
-          ),
-        }))
-        return
-      }
-    },
-    [activeSessionID, sessions, refreshSessions],
-  )
+    loadMessages(activeSessionID)
+  }, [activeSessionID, loadMessages])
 
   useEffect(() => {
-    eventSubscription.current?.close()
-    eventSubscription.current = subscribeEvents(handleEvent, config)
+    const subscription = subscribeEvents((event: ServerEvent) => {
+      const store = useOpencodeStore.getState()
+      switch (event.type) {
+        case "server.connected":
+          store.refreshSessions()
+          break
+        case "session.updated":
+          store.mergeSession(event.properties.info)
+          break
+        case "session.deleted":
+          store.removeSessionState(event.properties.info.id)
+          break
+        case "session.idle":
+          store.setBusy(event.properties.sessionID, false)
+          break
+        case "session.error": {
+          if (event.properties.sessionID) {
+            store.setBusy(event.properties.sessionID, false)
+          }
+          const rawMessage = event.properties.error?.data?.message ?? event.properties.error?.message
+          const message =
+            typeof rawMessage === "string"
+              ? rawMessage
+              : rawMessage != null
+              ? JSON.stringify(rawMessage)
+              : "Session error"
+          store.setLastError(message)
+          break
+        }
+        case "message.created":
+          store.mergeMessage({
+            info: event.properties.info,
+            parts: event.properties.parts,
+          })
+          break
+        case "message.updated":
+          store.updateMessageInfo(event.properties.info)
+          break
+        case "message.removed":
+          store.removeMessage(event.properties.sessionID, event.properties.messageID)
+          break
+        case "message.part.updated":
+          store.updateMessagePart(event.properties.part)
+          break
+        case "message.part.removed":
+          store.removeMessagePart(event.properties.sessionID, event.properties.messageID, event.properties.partID)
+          break
+        default:
+          break
+      }
+    }, config)
     return () => {
-      eventSubscription.current?.close()
+      subscription.close()
     }
-  }, [config, handleEvent])
+  }, [config.baseUrl, config.directory])
 
-  const selectSession = useCallback((sessionID: string) => {
-    setActiveSessionID(sessionID)
-  }, [])
-
-  const createSessionAction = useCallback(
-    async (input?: { parentID?: string; title?: string }) => {
-      const result = await createSession(input ?? {}, config)
-      setSessions((prev) => mergeOrInsert(prev, result))
-      setActiveSessionID(result.id)
-      return result
-    },
-    [config],
-  )
-
-  const deleteSessionAction = useCallback(
-    async (sessionID: string) => {
-      await deleteSessionRequest(sessionID, config)
-      setSessions((prev) => removeSession(prev, sessionID))
-      setMessages((prev) => {
-        const next = { ...prev }
-        delete next[sessionID]
-        return next
-      })
-      setActiveSessionID((current) => {
-        if (current !== sessionID) return current
-        const remaining = sessions.filter((session) => session.id !== sessionID)
-        return remaining.length ? remaining[0]!.id : undefined
-      })
-    },
-    [config, sessions],
-  )
-
-  const prompt = useCallback(
-    async (sessionID: string, input: { text: string }) => {
-      if (!input.text.trim()) return
-      setBusySessionIDs((prev) => new Set(prev).add(sessionID))
-      const payload: PromptInput = {
-        parts: [
-          {
-            type: "text",
-            text: input.text,
-          },
-        ],
-      }
-      try {
-        const response = await sendPrompt(sessionID, payload, config)
-        setMessages((prev) => ({
-          ...prev,
-          [sessionID]: mergeMessage(prev[sessionID] ?? [], response),
-        }))
-      } catch (error) {
-        console.error("Failed to send prompt", error)
-      } finally {
-        setBusySessionIDs((prev) => {
-          const next = new Set(prev)
-          next.delete(sessionID)
-          return next
-        })
-      }
-    },
-    [config],
-  )
-
-  const updateConfig = useCallback((input: Partial<OpencodeConfig>) => {
-    setConfig((prev) => {
-      const next = { ...prev, ...input }
-      writeConfig(next)
-      return next
-    })
-  }, [])
-
-  const activeSession = useMemo(
-    () => sessions.find((session) => session.id === activeSessionID),
-    [sessions, activeSessionID],
-  )
-
-  const activeMessages = useMemo(() => {
-    if (!activeSessionID) return []
-    return messages[activeSessionID] ?? []
-  }, [messages, activeSessionID])
-
-  const value: OpencodeStateValue = {
-    config,
-    updateConfig,
-    sessions,
-    isLoadingSessions,
-    isLoadingMessages,
-    activeSessionID,
-    activeSession,
-    activeMessages,
-    busySessionIDs,
-    selectSession,
-    refreshSessions,
-    prompt,
-    createSession: createSessionAction,
-    deleteSession: deleteSessionAction,
-  }
-
-  return <OpencodeContext.Provider value={value}>{children}</OpencodeContext.Provider>
-}
-
-export function useOpencode() {
-  const context = useContext(OpencodeContext)
-  if (!context) throw new Error("useOpencode must be used within OpencodeProvider")
-  return context
+  return <>{children}</>
 }
 
 export type { SessionInfo, MessageWithParts } from "@/types/opencode"

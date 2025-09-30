@@ -10,42 +10,72 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { useOpencode } from "@/state/opencode-store"
+import { useOpencodeStore } from "@/state/opencode-store"
 import { cn } from "@/lib/utils"
-import { Loader2, Settings } from "lucide-react"
+import { AlertTriangle, Loader2, Settings } from "lucide-react"
+import { useShallow } from "zustand/react/shallow"
 
 export function ChatHeader() {
-  const { activeSession, isLoadingMessages, busySessionIDs, activeSessionID } = useOpencode()
+  const { activeSession, isLoadingMessages, busySessionIDs, activeSessionID, lastError } = useOpencodeStore(
+    useShallow((state) => ({
+      activeSession: state.activeSession,
+      isLoadingMessages: state.isLoadingMessages,
+      busySessionIDs: state.busySessionIDs,
+      activeSessionID: state.activeSessionID,
+      lastError: state.lastError,
+    })),
+  )
+  const clearError = useOpencodeStore((state) => state.clearError)
   const isBusy = activeSessionID ? busySessionIDs.has(activeSessionID) : false
 
   return (
-    <div className="flex items-center justify-between px-6 py-4">
-      <div>
-        <h1 className="text-lg font-semibold leading-tight text-foreground">
-          {activeSession ? activeSession.title : "Select a session"}
-        </h1>
-        <p className="text-sm text-foreground/60">
-          {activeSession ? new Date(activeSession.time.updated).toLocaleString() : "No session selected"}
-        </p>
+    <div className="flex flex-col gap-2 px-6 py-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold leading-tight text-foreground">
+            {activeSession ? activeSession.title : "Select a session"}
+          </h1>
+          <p className="text-sm text-foreground/60">
+            {activeSession ? new Date(activeSession.time.updated).toLocaleString() : "No session selected"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full border border-border/60 px-3 py-1 text-xs font-medium",
+              isBusy ? "bg-primary/10 text-primary" : "bg-secondary/40 text-foreground/70",
+            )}
+          >
+            {isLoadingMessages ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {isBusy ? "Assistant working" : "Idle"}
+          </span>
+          <SettingsDialogTrigger />
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            "inline-flex items-center gap-2 rounded-full border border-border/60 px-3 py-1 text-xs font-medium",
-            isBusy ? "bg-primary/10 text-primary" : "bg-secondary/40 text-foreground/70",
-          )}
-        >
-          {isLoadingMessages ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          {isBusy ? "Assistant working" : "Idle"}
-        </span>
-        <SettingsDialogTrigger />
-      </div>
+      {lastError ? (
+        <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <span className="flex-1 truncate" title={lastError}>
+            {lastError}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-destructive hover:bg-destructive/10"
+            onClick={clearError}
+          >
+            Dismiss
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
 
 function SettingsDialogTrigger() {
-  const { config, updateConfig, refreshSessions } = useOpencode()
+  const config = useOpencodeStore((state) => state.config)
+  const updateConfig = useOpencodeStore((state) => state.updateConfig)
+  const refreshSessions = useOpencodeStore((state) => state.refreshSessions)
   const [open, setOpen] = useState(false)
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
   const [directory, setDirectory] = useState(config.directory ?? "")
@@ -64,8 +94,16 @@ function SettingsDialogTrigger() {
     }
   }
 
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      setBaseUrl(config.baseUrl)
+      setDirectory(config.directory ?? "")
+    }
+    setOpen(next)
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(next) => setOpen(next)}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon" title="Settings">
           <Settings className="h-5 w-5" />
