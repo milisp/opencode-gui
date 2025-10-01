@@ -28,7 +28,7 @@ export function ChatTimeline() {
   }, [activeMessages])
 
   return (
-    <ScrollArea className="flex-1">
+    <ScrollArea className="flex-1 h-96">
       <div ref={viewportRef} className="space-y-6 px-6 py-6">
         {activeMessages.map((message) => (
           <ChatMessage key={message.info.id} message={message} />

@@ -39,12 +39,11 @@ export function ChatComposer() {
           value={value}
           onChange={(event) => setValue(event.target.value)}
           placeholder={activeSessionID ? "Ask opencode to help with your code..." : "Select a session to get started"}
-          className="max-h-48 min-h-[120px] flex-1 resize-none bg-background"
+          className="max-h-48 min-h-16 flex-1 resize-none bg-background"
           disabled={!activeSessionID || sending || isBusy}
         />
         <Button type="submit" size="lg" className={cn("self-center") } disabled={disabled}>
-          {sending || isBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-          {sending || isBusy ? "Sending" : "Send"}
+          {sending || isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         </Button>
       </div>
     </form>
