@@ -3,7 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { useOpencodeStore } from "@/state/opencode-store"
+import { useOpencodeStore } from "@/stores/opencode-store"
 import { FilePlus2, Loader2, RefreshCw, Search, Trash2 } from "lucide-react"
 import { useShallow } from "zustand/react/shallow"
 

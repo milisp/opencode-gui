@@ -10,10 +10,12 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { useOpencodeStore } from "@/state/opencode-store"
+import { useOpencodeStore } from "@/stores/opencode-store"
 import { cn } from "@/lib/utils"
-import { AlertTriangle, Loader2, Settings } from "lucide-react"
+import { AlertTriangle, FileText, Loader2, Settings } from "lucide-react"
 import { useShallow } from "zustand/react/shallow"
+import { open as openDir } from '@tauri-apps/plugin-dialog';
+import useProjectStore from "@/stores/project-store"
 
 export function ChatHeader() {
   const { activeSession, isLoadingMessages, busySessionIDs, activeSessionID, lastError } = useOpencodeStore(
@@ -78,7 +80,9 @@ function SettingsDialogTrigger() {
   const refreshSessions = useOpencodeStore((state) => state.refreshSessions)
   const [open, setOpen] = useState(false)
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
-  const [directory, setDirectory] = useState(config.directory ?? "")
+  const projectDirectory = useProjectStore((s) => s.directory)
+  const setProjectDirectory = useProjectStore((s) => s.setDirectory)
+  const [directory, setDirectory] = useState(projectDirectory ?? config.directory ?? "")
   const [saving, setSaving] = useState(false)
 
   const handleSave = async () => {
@@ -97,10 +101,29 @@ function SettingsDialogTrigger() {
   const handleOpenChange = (next: boolean) => {
     if (next) {
       setBaseUrl(config.baseUrl)
-      setDirectory(config.directory ?? "")
+      // prefer project store value if present
+      setDirectory(useProjectStore.getState().directory ?? config.directory ?? "")
     }
     setOpen(next)
   }
+
+
+  const handleSelectProjectDir = async () => {
+    try {
+      const result = await openDir({
+        multiple: false,
+        directory: true
+      });
+      if (result) {
+        // tauri plugin-dialog returns either a string or array of strings depending on options
+        const picked = Array.isArray(result) ? result[0] : result
+        setDirectory(picked as string)
+        setProjectDirectory(picked as string)
+      }
+    } catch (error) {
+      console.error('Failed to select codex executable:', error);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -128,14 +151,24 @@ function SettingsDialogTrigger() {
           </div>
           <div className="space-y-1">
             <label htmlFor="directory" className="text-sm font-medium text-foreground">
-              Project directory (optional)
+              Project directory
             </label>
-            <Input
-              id="directory"
-              value={directory}
-              placeholder="/path/to/workspace"
-              onChange={(event) => setDirectory(event.target.value)}
-            />
+            <div className="flex">
+              <Input
+                id="directory"
+                value={directory}
+                placeholder="/path/to/workspace"
+                onChange={(event) => setDirectory(event.target.value)}
+              />
+              <Button
+                variant="outline"
+                onClick={handleSelectProjectDir}
+                className="flex items-center gap-2"
+              >
+                <FileText className="w-4 h-4" />
+                Browse
+              </Button>
+            </div>
             <p className="text-xs text-foreground/60">
               When set, the app sends a <code className="rounded bg-foreground/10 px-1">directory</code> query parameter for all
               requests so the opencode server scopes to a specific workspace.

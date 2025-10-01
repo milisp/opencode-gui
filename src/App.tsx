@@ -3,7 +3,7 @@ import { SessionSidebar } from "@/components/chat/session-sidebar"
 import { ChatHeader } from "@/components/chat/chat-header"
 import { ChatTimeline } from "@/components/chat/chat-timeline"
 import { ChatComposer } from "@/components/chat/chat-composer"
-import { OpencodeProvider } from "@/state/opencode-store"
+import { OpencodeProvider } from "@/stores/opencode-store"
 import "./App.css"
 
 function App() {

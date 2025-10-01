@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { useOpencodeStore } from "@/state/opencode-store"
+import { useOpencodeStore } from "@/stores/opencode-store"
 import { Loader2, Send } from "lucide-react"
 import { cn } from "@/lib/utils"
 
