@@ -68,7 +68,7 @@ export function SessionSidebar() {
       </div>
       <Separator className="bg-border/50" />
       <ScrollArea className="flex-1">
-        <div className="space-y-1 px-2 py-3">
+        <div className="space-y-1 px-2 py-3 w-72">
           {filtered.map((session) => {
             const isActive = session.id === activeSessionID
             const isDeleting = deletingID === session.id
