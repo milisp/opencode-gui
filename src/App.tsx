@@ -1,19 +1,39 @@
-import { AppShell } from "@/components/layout/app-shell"
-import { SessionSidebar } from "@/components/chat/session-sidebar"
-import { ChatHeader } from "@/components/chat/chat-header"
-import { ChatTimeline } from "@/components/chat/chat-timeline"
-import { ChatComposer } from "@/components/chat/chat-composer"
-import { OpencodeProvider } from "@/stores/opencode-store"
-import "./App.css"
+/* @refresh reload */
+import { Router, Route } from "@solidjs/router"
+import type { Component } from "solid-js"
+import "@/index.css"
+import Layout from "@/pages/layout"
+import Home from "@/pages"
+import {
+  EventProvider,
+  SDKProvider,
+  SyncProvider,
+  LocalProvider,
+  ThemeProvider,
+  ShikiProvider,
+  MarkedProvider,
+} from "@/context"
 
-function App() {
-  return (
-    <OpencodeProvider>
-      <AppShell sidebar={<SessionSidebar />} header={<ChatHeader />} footer={<ChatComposer />}>
-        <ChatTimeline />
-      </AppShell>
-    </OpencodeProvider>
-  )
-}
+const App: Component = () => (
+  <div class="h-full bg-background text-text-muted">
+    <ThemeProvider defaultTheme="opencode" defaultDarkMode={true}>
+      <ShikiProvider>
+        <MarkedProvider>
+          <SDKProvider>
+            <EventProvider>
+              <SyncProvider>
+                <LocalProvider>
+                  <Router root={Layout}>
+                    <Route path="/" component={Home} />
+                  </Router>
+                </LocalProvider>
+              </SyncProvider>
+            </EventProvider>
+          </SDKProvider>
+        </MarkedProvider>
+      </ShikiProvider>
+    </ThemeProvider>
+  </div>
+)
 
 export default App
